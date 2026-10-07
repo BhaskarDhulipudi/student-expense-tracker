@@ -1,6 +1,14 @@
-target/
+.jdk/
+.oracleJdk-27/
+oracleJdk-27/
+.maven/
+.mvn/
+.vscode/
+.idea/
+.settings/
 .classpath
 .project
-.settings/
-.idea/
 *.iml
+target/
+.DS_Store
+*.log
