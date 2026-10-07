@@ -1,487 +1,1048 @@
-const DB_NAME="studentExpenseTracker",DB_VERSION=1,STORE="expenses";
-const $=id=>document.getElementById(id),pad=n=>String(n).padStart(2,"0");
+const DB_NAME = "studentExpenseTracker";
+const DB_VERSION = 1;
+const STORE = "expenses";
 
-const now=new Date(),monthNow=`${now.getFullYear()}-${pad(now.getMonth()+1)}`,today=`${monthNow}-${pad(now.getDate())}`;
+const $ = id => document.getElementById(id);
 
-$("month").value=monthNow;
-$("date").value=today;
+const pad = n => String(n).padStart(2, "0");
 
-const money=n=>"₹"+Number(n||0).toLocaleString("en-IN",{maximumFractionDigits:2});
+const now = new Date();
 
-const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({
-  "&":"&amp;",
-  "<":"&lt;",
-  ">":"&gt;",
-  '"':"&quot;",
-  "'":"&#39;"
-}[m]));
+const monthNow =
+  `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
 
-function uid(){
-  return crypto.randomUUID
-    ? crypto.randomUUID()
-    : Date.now()+"-"+Math.random().toString(16).slice(2);
-}
+const today =
+  `${monthNow}-${pad(now.getDate())}`;
 
-function db(){
-  return new Promise((resolve,reject)=>{
-    const r=indexedDB.open(DB_NAME,DB_VERSION);
+$("month").value = monthNow;
+$("date").value = today;
 
-    r.onupgradeneeded=()=>{
-      if(!r.result.objectStoreNames.contains(STORE)){
-        r.result.createObjectStore(STORE,{keyPath:"clientId"});
-      }
-    };
 
-    r.onsuccess=()=>resolve(r.result);
-    r.onerror=()=>reject(r.error);
-  });
-}
+/* =========================================================
+   HELPERS
+========================================================= */
 
-async function all(){
-  const d=await db();
-
-  return new Promise((res,rej)=>{
-    const r=d.transaction(STORE,"readonly")
-      .objectStore(STORE)
-      .getAll();
-
-    r.onsuccess=()=>res(r.result);
-    r.onerror=()=>rej(r.error);
-  });
-}
-
-async function put(x){
-  const d=await db();
-
-  return new Promise((res,rej)=>{
-    const t=d.transaction(STORE,"readwrite");
-
-    t.objectStore(STORE).put(x);
-
-    t.oncomplete=res;
-    t.onerror=()=>rej(t.error);
-  });
-}
-
-function setSyncText(text){
-  $("syncText").textContent=text;
-}
-
-let syncInProgress=false;
-
-function network(){
-
-  const update=()=>{
-    const on=navigator.onLine;
-    const b=$("network");
-
-    b.className="status "+(on?"online":"offline");
-
-    b.querySelector("span:last-child").textContent=
-      on?"Online":"Offline";
-  };
-
-  update();
-
-  // When internet comes back, automatically synchronize
-  addEventListener("online",()=>{
-    update();
-    sync();
-  });
-
-  // When internet goes off, keep working locally
-  addEventListener("offline",()=>{
-    update();
-    setSyncText("Offline — saved on this device");
-  });
-}
-
-async function render(){
-
-  const m=$("month").value||monthNow;
-
-  const rows=(await all())
-    .filter(x=>!x.deleted&&x.expenseDate.startsWith(m));
-
-  const total=rows.reduce(
-    (s,x)=>s+Number(x.amount),
-    0
-  );
-
-  const dates=new Set(
-    rows.map(x=>x.expenseDate)
-  );
-
-  $("total").textContent=money(total);
-
-  $("average").textContent=
-    money(dates.size?total/dates.size:0);
-
-  $("averageHint").textContent=
-    dates.size
-      ?`${dates.size} spending day${dates.size===1?"":"s"}`
-      :"0 days tracked";
-
-  $("count").textContent=rows.length;
-
-  const cats={};
-
-  rows.forEach(x=>{
-    cats[x.category]=(cats[x.category]||0)+Number(x.amount);
-  });
-
-  const sorted=Object.entries(cats)
-    .sort((a,b)=>b[1]-a[1]);
-
-  $("topCategory").textContent=
-    sorted[0]?.[0]||"—";
-
-  $("topAmount").textContent=
-    sorted[0]
-      ?money(sorted[0][1])
-      :"No spending yet";
-
-  $("bars").innerHTML=
-    sorted.length
-      ?sorted.map(([c,v])=>`
-        <div class="barrow">
-          <div class="barhead">
-            <span>${esc(c)}</span>
-            <b>${money(v)}</b>
-          </div>
-
-          <div class="track">
-            <div
-              class="fill"
-              style="width:${Math.min(100,v/total*100)}%">
-            </div>
-          </div>
-        </div>
-      `).join("")
-      :"<div class='empty'>No expenses recorded for this month.</div>";
-
-  rows.sort(
-    (a,b)=>
-      b.expenseDate.localeCompare(a.expenseDate)||
-      b.updatedAt.localeCompare(a.updatedAt)
-  );
-
-  $("list").innerHTML=
-    rows.length
-      ?rows.slice(0,30).map(x=>`
-        <div class="expense">
-
-          <div class="expense-main">
-
-            <div class="expense-amount">
-              ${money(x.amount)}
-            </div>
-
-            <div class="expense-meta">
-              ${esc(x.category)}
-              · ${esc(x.expenseDate)}
-              · ${esc(x.paymentMethod)}
-              ${x.note?" · "+esc(x.note):""}
-            </div>
-
-          </div>
-
-          <button
-            class="delete"
-            data-id="${esc(x.clientId)}">
-            Delete
-          </button>
-
-        </div>
-      `).join("")
-      :"<div class='empty'>No expenses recorded for this month.</div>";
+function money(value) {
+    return "₹" + Number(value || 0).toLocaleString("en-IN", {
+        maximumFractionDigits: 2
+    });
 }
 
 
-/*
- * CLOUD SYNCHRONIZATION
- *
- * This function:
- * 1. Uploads local expenses to Spring Boot
- * 2. Downloads expenses from PostgreSQL
- * 3. Updates local IndexedDB
- *
- * It is also called automatically every 10 seconds.
- */
+function esc(value) {
+    return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+    }[char]));
+}
 
-async function sync(){
 
-  // Don't start another sync while one is already running
-  if(syncInProgress)return;
+function createId() {
 
-  // If offline, keep everything locally
-  if(!navigator.onLine){
-    setSyncText("Offline — saved on this device");
-    return;
-  }
+    if (crypto.randomUUID) {
+        return crypto.randomUUID();
+    }
 
-  syncInProgress=true;
+    return Date.now() + "-" +
+        Math.random().toString(16).slice(2);
+}
 
-  setSyncText("Syncing…");
 
-  try{
+/* =========================================================
+   INDEXED DB
+========================================================= */
 
-    // Get all local expenses
-    const local=await all();
+function openDB() {
 
-    // Upload local expenses to the Spring Boot API
-    for(const x of local){
+    return new Promise((resolve, reject) => {
 
-      const r=await fetch(
-        "/api/expenses",
-        {
-          method:"POST",
-          headers:{
-            "Content-Type":"application/json"
-          },
-          body:JSON.stringify(x)
+        const request =
+            indexedDB.open(DB_NAME, DB_VERSION);
+
+        request.onupgradeneeded = () => {
+
+            const database = request.result;
+
+            if (!database.objectStoreNames.contains(STORE)) {
+
+                database.createObjectStore(
+                    STORE,
+                    {
+                        keyPath: "clientId"
+                    }
+                );
+            }
+        };
+
+        request.onsuccess = () => {
+            resolve(request.result);
+        };
+
+        request.onerror = () => {
+            reject(request.error);
+        };
+    });
+}
+
+
+async function getAllExpenses() {
+
+    const database = await openDB();
+
+    return new Promise((resolve, reject) => {
+
+        const request =
+            database
+                .transaction(STORE, "readonly")
+                .objectStore(STORE)
+                .getAll();
+
+        request.onsuccess = () => {
+            resolve(request.result);
+        };
+
+        request.onerror = () => {
+            reject(request.error);
+        };
+    });
+}
+
+
+async function saveExpense(expense) {
+
+    const database = await openDB();
+
+    return new Promise((resolve, reject) => {
+
+        const transaction =
+            database.transaction(
+                STORE,
+                "readwrite"
+            );
+
+        transaction
+            .objectStore(STORE)
+            .put(expense);
+
+        transaction.oncomplete = () => {
+            resolve();
+        };
+
+        transaction.onerror = () => {
+            reject(transaction.error);
+        };
+    });
+}
+
+
+/* =========================================================
+   NETWORK STATUS
+========================================================= */
+
+function updateNetworkStatus() {
+
+    const online = navigator.onLine;
+
+    const networkElement = $("network");
+
+    if (!networkElement) {
+        return;
+    }
+
+    networkElement.className =
+        "status " +
+        (online ? "online" : "offline");
+
+    const last =
+        networkElement.querySelector(
+            "span:last-child"
+        );
+
+    if (last) {
+        last.textContent =
+            online ? "Online" : "Offline";
+    }
+
+    if (!online) {
+
+        setSyncMessage(
+            "Offline — saved on this device"
+        );
+    }
+}
+
+
+function setSyncMessage(message) {
+
+    const syncText = $("syncText");
+
+    if (syncText) {
+        syncText.textContent = message;
+    }
+}
+
+
+window.addEventListener(
+    "online",
+    () => {
+
+        updateNetworkStatus();
+
+        /*
+         * Internet is back.
+         * Synchronize immediately.
+         */
+        syncWithCloud();
+    }
+);
+
+
+window.addEventListener(
+    "offline",
+    () => {
+
+        updateNetworkStatus();
+
+        setSyncMessage(
+            "Offline — saved on this device"
+        );
+    }
+);
+
+
+/* =========================================================
+   RENDER UI
+========================================================= */
+
+async function render() {
+
+    const selectedMonth =
+        $("month").value || monthNow;
+
+    /*
+     * IMPORTANT:
+     *
+     * We keep deleted records inside IndexedDB
+     * so deletion can propagate to other devices.
+     *
+     * But we DON'T display deleted records.
+     */
+
+    const allExpenses =
+        await getAllExpenses();
+
+    const rows =
+        allExpenses.filter(expense =>
+            !expense.deleted &&
+            expense.expenseDate &&
+            expense.expenseDate.startsWith(
+                selectedMonth
+            )
+        );
+
+
+    /* -----------------------------------------
+       TOTAL
+    ----------------------------------------- */
+
+    const total =
+        rows.reduce(
+            (sum, expense) =>
+                sum + Number(expense.amount || 0),
+            0
+        );
+
+
+    /* -----------------------------------------
+       DAILY AVERAGE
+    ----------------------------------------- */
+
+    const spendingDays =
+        new Set(
+            rows.map(
+                expense => expense.expenseDate
+            )
+        );
+
+
+    const dailyAverage =
+        spendingDays.size
+            ? total / spendingDays.size
+            : 0;
+
+
+    $("total").textContent =
+        money(total);
+
+
+    $("average").textContent =
+        money(dailyAverage);
+
+
+    $("averageHint").textContent =
+        `${spendingDays.size} spending day` +
+        (spendingDays.size === 1 ? "" : "s");
+
+
+    $("count").textContent =
+        rows.length;
+
+
+    /* -----------------------------------------
+       CATEGORY TOTALS
+    ----------------------------------------- */
+
+    const categories = {};
+
+    rows.forEach(expense => {
+
+        const category =
+            expense.category || "Other";
+
+        categories[category] =
+            (categories[category] || 0) +
+            Number(expense.amount || 0);
+    });
+
+
+    const sortedCategories =
+        Object.entries(categories)
+            .sort((a, b) => b[1] - a[1]);
+
+
+    if (sortedCategories.length) {
+
+        $("topCategory").textContent =
+            sortedCategories[0][0];
+
+        $("topAmount").textContent =
+            money(sortedCategories[0][1]);
+
+    } else {
+
+        $("topCategory").textContent =
+            "—";
+
+        $("topAmount").textContent =
+            "No spending yet";
+    }
+
+
+    /* -----------------------------------------
+       CATEGORY BARS
+    ----------------------------------------- */
+
+    if (sortedCategories.length) {
+
+        $("bars").innerHTML =
+            sortedCategories.map(
+                ([category, amount]) => {
+
+                    const percentage =
+                        total > 0
+                            ? Math.min(
+                                100,
+                                amount / total * 100
+                            )
+                            : 0;
+
+                    return `
+                        <div class="barrow">
+
+                            <div class="barhead">
+
+                                <span>
+                                    ${esc(category)}
+                                </span>
+
+                                <b>
+                                    ${money(amount)}
+                                </b>
+
+                            </div>
+
+                            <div class="track">
+
+                                <div
+                                    class="fill"
+                                    style="width:${percentage}%">
+                                </div>
+
+                            </div>
+
+                        </div>
+                    `;
+                }
+            ).join("");
+
+    } else {
+
+        $("bars").innerHTML =
+            "<div class='empty'>" +
+            "No expenses recorded for this month." +
+            "</div>";
+    }
+
+
+    /* -----------------------------------------
+       RECENT EXPENSES
+    ----------------------------------------- */
+
+    rows.sort((a, b) => {
+
+        const dateCompare =
+            String(b.expenseDate)
+                .localeCompare(
+                    String(a.expenseDate)
+                );
+
+        if (dateCompare !== 0) {
+            return dateCompare;
         }
-      );
 
-      if(!r.ok){
-        throw new Error("upload failed");
-      }
+        return String(b.updatedAt)
+            .localeCompare(
+                String(a.updatedAt)
+            );
+    });
+
+
+    const recent =
+        rows.slice(0, 30);
+
+
+    if (recent.length) {
+
+        $("list").innerHTML =
+            recent.map(expense => `
+
+                <div class="expense">
+
+                    <div class="expense-main">
+
+                        <div class="expense-amount">
+                            ${money(expense.amount)}
+                        </div>
+
+                        <div class="expense-meta">
+
+                            ${esc(expense.category)}
+                            ·
+                            ${esc(expense.expenseDate)}
+                            ·
+                            ${esc(expense.paymentMethod)}
+
+                            ${
+                                expense.note
+                                    ? " · " +
+                                      esc(expense.note)
+                                    : ""
+                            }
+
+                        </div>
+
+                    </div>
+
+                    <button
+                        class="delete"
+                        data-id="${esc(expense.clientId)}">
+
+                        Delete
+
+                    </button>
+
+                </div>
+
+            `).join("");
+
+    } else {
+
+        $("list").innerHTML =
+            "<div class='empty'>" +
+            "No expenses recorded for this month." +
+            "</div>";
     }
-
-    // Download the latest expenses from the server
-    const r=await fetch("/api/expenses");
-
-    if(!r.ok){
-      throw new Error("download failed");
-    }
-
-    const remote=await r.json();
-
-    // Update local IndexedDB with newer server records
-    for(const x of remote){
-
-      const old=local.find(
-        y=>y.clientId===x.clientId
-      );
-
-      if(
-        !old ||
-        new Date(x.updatedAt)>new Date(old.updatedAt)
-      ){
-        await put(x);
-      }
-    }
-
-    setSyncText("Synced just now");
-
-    $("message").textContent=
-      "✓ Synced successfully.";
-
-    await render();
-
-  }catch(e){
-
-    setSyncText(
-      "Sync unavailable — changes kept locally"
-    );
-
-  }finally{
-
-    syncInProgress=false;
-  }
 }
 
 
+/* =========================================================
+   CLOUD SYNC
+========================================================= */
+
 /*
- * ADD EXPENSE
+ * Prevent two sync operations from running
+ * at the same time.
  */
+
+let syncInProgress = false;
+
+
+async function syncWithCloud() {
+
+    /*
+     * Don't synchronize if there is no internet.
+     */
+
+    if (!navigator.onLine) {
+
+        setSyncMessage(
+            "Offline — saved on this device"
+        );
+
+        return;
+    }
+
+
+    /*
+     * Don't start another sync while one
+     * is already running.
+     */
+
+    if (syncInProgress) {
+        return;
+    }
+
+
+    syncInProgress = true;
+
+    setSyncMessage("Syncing…");
+
+
+    try {
+
+        /* =================================================
+           STEP 1
+           GET LOCAL DATA
+        ================================================= */
+
+        const localExpenses =
+            await getAllExpenses();
+
+
+        /* =================================================
+           STEP 2
+           UPLOAD LOCAL DATA
+           
+           This includes deleted records.
+           
+           VERY IMPORTANT:
+           
+           We DO NOT filter:
+           
+           deleted === true
+           
+           because deleted records must reach
+           the cloud so the other device can
+           learn about the deletion.
+        ================================================= */
+
+        for (const expense of localExpenses) {
+
+            const response =
+                await fetch(
+                    "/api/expenses",
+                    {
+                        method: "POST",
+
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
+
+                        body:
+                            JSON.stringify(expense)
+                    }
+                );
+
+
+            if (!response.ok) {
+
+                throw new Error(
+                    "Failed to upload expense"
+                );
+            }
+        }
+
+
+        /* =================================================
+           STEP 3
+           DOWNLOAD CLOUD DATA
+        ================================================= */
+
+        const response =
+            await fetch(
+                "/api/expenses",
+                {
+                    method: "GET",
+                    cache: "no-store"
+                }
+            );
+
+
+        if (!response.ok) {
+
+            throw new Error(
+                "Failed to download expenses"
+            );
+        }
+
+
+        const remoteExpenses =
+            await response.json();
+
+
+        /* =================================================
+           STEP 4
+           MERGE CLOUD DATA INTO LOCAL DATABASE
+           
+           IMPORTANT:
+           
+           Deleted records are also saved locally.
+           
+           This means:
+           
+           Laptop deletes
+                  ↓
+           Cloud deleted=true
+                  ↓
+           Mobile downloads deleted=true
+                  ↓
+           Mobile IndexedDB stores it
+                  ↓
+           render() hides it
+           
+           Same works in reverse.
+        ================================================= */
+
+        const latestLocal =
+            await getAllExpenses();
+
+
+        for (const remoteExpense of remoteExpenses) {
+
+            const localExpense =
+                latestLocal.find(
+                    local =>
+                        local.clientId ===
+                        remoteExpense.clientId
+                );
+
+
+            /*
+             * If local copy doesn't exist,
+             * save cloud copy.
+             */
+
+            if (!localExpense) {
+
+                await saveExpense(
+                    remoteExpense
+                );
+
+                continue;
+            }
+
+
+            /*
+             * Compare timestamps.
+             *
+             * Cloud record wins when it is
+             * newer OR exactly the same time.
+             */
+
+            const remoteTime =
+                new Date(
+                    remoteExpense.updatedAt || 0
+                ).getTime();
+
+
+            const localTime =
+                new Date(
+                    localExpense.updatedAt || 0
+                ).getTime();
+
+
+            if (remoteTime >= localTime) {
+
+                await saveExpense(
+                    remoteExpense
+                );
+            }
+        }
+
+
+        /* =================================================
+           STEP 5
+           REFRESH SCREEN
+        ================================================= */
+
+        await render();
+
+
+        setSyncMessage(
+            "Synced just now"
+        );
+
+
+        const message =
+            $("message");
+
+        if (message) {
+
+            message.textContent =
+                "✓ Synced successfully.";
+        }
+
+
+    } catch (error) {
+
+        console.error(
+            "Cloud sync error:",
+            error
+        );
+
+
+        /*
+         * Don't lose local data.
+         */
+
+        setSyncMessage(
+            "Sync unavailable — changes kept locally"
+        );
+
+
+    } finally {
+
+        syncInProgress = false;
+    }
+}
+
+
+/* =========================================================
+   ADD EXPENSE
+========================================================= */
 
 $("expenseForm").addEventListener(
-  "submit",
-  async e=>{
+    "submit",
+    async event => {
 
-    e.preventDefault();
+        event.preventDefault();
 
-    const amount=Number(
-      $("amount").value
-    );
 
-    if(!amount||amount<=0){
+        const amount =
+            Number(
+                $("amount").value
+            );
 
-      $("message").textContent=
-        "Enter a valid amount.";
 
-      return;
+        if (!amount || amount <= 0) {
+
+            $("message").textContent =
+                "Enter a valid amount.";
+
+            return;
+        }
+
+
+        const expense = {
+
+            clientId:
+                createId(),
+
+            category:
+                $("category").value,
+
+            amount:
+                amount,
+
+            expenseDate:
+                $("date").value,
+
+            note:
+                $("note").value.trim(),
+
+            paymentMethod:
+                $("payment").value,
+
+            deleted:
+                false,
+
+            updatedAt:
+                new Date().toISOString()
+        };
+
+
+        /*
+         * Save locally FIRST.
+         *
+         * This guarantees offline support.
+         */
+
+        await saveExpense(
+            expense
+        );
+
+
+        $("amount").value = "";
+        $("note").value = "";
+
+
+        $("message").textContent =
+            "✓ Expense added.";
+
+
+        await render();
+
+
+        /*
+         * If online, immediately upload.
+         */
+
+        if (navigator.onLine) {
+
+            await syncWithCloud();
+        }
     }
-
-    const x={
-      clientId:uid(),
-      category:$("category").value,
-      amount,
-      expenseDate:$("date").value,
-      note:$("note").value.trim(),
-      paymentMethod:$("payment").value,
-      deleted:false,
-      updatedAt:new Date().toISOString()
-    };
-
-    // Save immediately to IndexedDB
-    await put(x);
-
-    $("amount").value="";
-    $("note").value="";
-
-    $("message").textContent=
-      navigator.onLine
-        ?"✓ Expense added."
-        :"✓ Expense saved offline.";
-
-    await render();
-
-    // Immediately sync if online
-    if(navigator.onLine){
-      await sync();
-    }
-  }
 );
 
 
-/*
- * MONTH CHANGE
- */
+/* =========================================================
+   MONTH CHANGE
+========================================================= */
 
 $("month").addEventListener(
-  "change",
-  ()=>{
-    const m=$("month").value;
+    "change",
+    async () => {
 
-    if(m){
+        const selectedMonth =
+            $("month").value;
 
-      $("date").value=
-        m===monthNow
-          ?today
-          :`${m}-01`;
 
+        if (selectedMonth) {
+
+            if (
+                selectedMonth === monthNow
+            ) {
+
+                $("date").value =
+                    today;
+
+            } else {
+
+                $("date").value =
+                    `${selectedMonth}-01`;
+            }
+        }
+
+
+        await render();
     }
-
-    render();
-  }
 );
 
 
-/*
- * MANUAL SYNC BUTTON
- */
+/* =========================================================
+   MANUAL SYNC
+========================================================= */
 
 $("syncBtn").addEventListener(
-  "click",
-  sync
+    "click",
+    async () => {
+
+        await syncWithCloud();
+    }
 );
 
 
-/*
- * DELETE EXPENSE
- */
+/* =========================================================
+   DELETE EXPENSE
+========================================================= */
 
 $("list").addEventListener(
-  "click",
-  async e=>{
+    "click",
+    async event => {
 
-    const b=e.target.closest(".delete");
+        const button =
+            event.target.closest(
+                ".delete"
+            );
 
-    if(!b)return;
 
-    const rows=await all();
+        if (!button) {
+            return;
+        }
 
-    const x=rows.find(
-      r=>r.clientId===b.dataset.id
-    );
 
-    if(x){
+        const clientId =
+            button.dataset.id;
 
-      x.deleted=true;
-      x.updatedAt=new Date().toISOString();
 
-      await put(x);
+        const expenses =
+            await getAllExpenses();
 
-      $("message").textContent=
-        "✓ Expense deleted.";
 
-      await render();
+        const expense =
+            expenses.find(
+                item =>
+                    item.clientId ===
+                    clientId
+            );
 
-      if(navigator.onLine){
-        await sync();
-      }
+
+        if (!expense) {
+            return;
+        }
+
+
+        /*
+         * VERY IMPORTANT:
+         *
+         * DO NOT remove the record from IndexedDB.
+         *
+         * Instead mark it deleted.
+         *
+         * This allows the deletion to be
+         * synchronized to the cloud and then
+         * to the other device.
+         */
+
+        expense.deleted = true;
+
+        expense.updatedAt =
+            new Date().toISOString();
+
+
+        await saveExpense(
+            expense
+        );
+
+
+        /*
+         * Immediately hide it from this device.
+         */
+
+        await render();
+
+
+        $("message").textContent =
+            "✓ Expense deleted.";
+
+
+        /*
+         * Upload deletion immediately
+         * when internet is available.
+         */
+
+        if (navigator.onLine) {
+
+            await syncWithCloud();
+        }
     }
-  }
+);
+
+
+/* =========================================================
+   AUTOMATIC SYNCHRONIZATION
+========================================================= */
+
+/*
+ * Every 10 seconds:
+ *
+ * Laptop  ←→  Cloud
+ * Mobile  ←→  Cloud
+ *
+ * This handles both additions and deletions.
+ */
+
+setInterval(
+    () => {
+
+        if (navigator.onLine) {
+
+            syncWithCloud();
+        }
+
+    },
+    10000
 );
 
 
 /*
- * NETWORK STATUS
+ * Synchronize when user comes back
+ * to the browser.
  */
 
-network();
+window.addEventListener(
+    "focus",
+    () => {
+
+        if (navigator.onLine) {
+
+            syncWithCloud();
+        }
+    }
+);
 
 
 /*
- * INITIAL PAGE LOAD
+ * Synchronize when the PWA becomes visible again.
+ */
+
+document.addEventListener(
+    "visibilitychange",
+    () => {
+
+        if (
+            document.visibilityState ===
+            "visible" &&
+            navigator.onLine
+        ) {
+
+            syncWithCloud();
+        }
+    }
+);
+
+
+/* =========================================================
+   INITIALIZATION
+========================================================= */
+
+updateNetworkStatus();
+
+
+/*
+ * Render local data immediately.
  */
 
 render();
 
-if(navigator.onLine){
-  sync();
+
+/*
+ * Then synchronize with cloud.
+ */
+
+if (navigator.onLine) {
+
+    syncWithCloud();
 }
 
 
-/*
- * ⭐ AUTOMATIC CLOUD SYNCHRONIZATION
- *
- * Every 10 seconds the application checks
- * the Render/Spring Boot server for changes.
- *
- * This means:
- *
- * Phone → PostgreSQL → Desktop
- *
- * can update automatically without pressing
- * "Sync now".
- */
+/* =========================================================
+   SERVICE WORKER
+========================================================= */
 
-setInterval(
-  ()=>{
-    if(navigator.onLine){
-      sync();
-    }
-  },
-  10000
-);
+if ("serviceWorker" in navigator) {
 
+    navigator.serviceWorker
+        .register("/sw.js")
+        .catch(error => {
 
-/*
- * If the user returns to the browser/app,
- * immediately check for cloud changes.
- */
-
-addEventListener(
-  "focus",
-  ()=>{
-    if(navigator.onLine){
-      sync();
-    }
-  }
-);
-
-
-/*
- * Service Worker
- */
-
-if("serviceWorker" in navigator){
-
-  navigator.serviceWorker
-    .register("/sw.js")
-    .catch(()=>{});
-
+            console.error(
+                "Service worker registration failed:",
+                error
+            );
+        });
 }
