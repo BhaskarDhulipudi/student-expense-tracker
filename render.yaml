@@ -6,14 +6,29 @@ services:
     region: singapore
     healthCheckPath: /
     envVars:
-      - key: DATABASE_URL
+      - key: DB_DRIVER
+        value: postgresql
+
+      - key: DB_HOST
         fromDatabase:
           name: student-expenses-db
-          property: connectionString
+          property: host
+
+      - key: DB_PORT
+        fromDatabase:
+          name: student-expenses-db
+          property: port
+
+      - key: DB_NAME
+        fromDatabase:
+          name: student-expenses-db
+          property: database
+
       - key: DB_USERNAME
         fromDatabase:
           name: student-expenses-db
           property: user
+
       - key: DB_PASSWORD
         fromDatabase:
           name: student-expenses-db
