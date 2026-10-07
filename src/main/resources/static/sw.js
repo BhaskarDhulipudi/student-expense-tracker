@@ -1,8 +1,77 @@
-const CACHE="student-expense-v2";
-const ASSETS=["/","/index.html","/app.css","/app.js","/manifest.webmanifest","/icons/icon-192.png","/icons/icon-512.png"];
-self.addEventListener("install",e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)).then(()=>self.skipWaiting())));
-self.addEventListener("activate",e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
-self.addEventListener("fetch",e=>{
-  if(e.request.method!=="GET")return;
-  e.respondWith(caches.match(e.request).then(c=>c||fetch(e.request).then(r=>{const copy=r.clone();caches.open(CACHE).then(x=>x.put(e.request,copy));return r}).catch(()=>caches.match("/index.html"))));
+const CACHE_NAME = "student-expense-tracker-v3";
+
+const APP_SHELL = [
+  "/",
+  "/index.html",
+  "/app.js",
+  "/app.css",
+  "/manifest.webmanifest"
+];
+
+self.addEventListener("install", event => {
+  event.waitUntil(
+    caches.open(CACHE_NAME)
+      .then(cache => cache.addAll(APP_SHELL))
+      .then(() => self.skipWaiting())
+  );
+});
+
+self.addEventListener("activate", event => {
+  event.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(
+        keys
+          .filter(key => key !== CACHE_NAME)
+          .map(key => caches.delete(key))
+      )
+    ).then(() => self.clients.claim())
+  );
+});
+
+
+self.addEventListener("fetch", event => {
+
+  const request = event.request;
+
+  // Only handle normal HTTP/HTTPS requests.
+  // Ignore chrome-extension:// and other unsupported schemes.
+  if (
+    request.method !== "GET" ||
+    (request.url.startsWith("http://") === false &&
+     request.url.startsWith("https://") === false)
+  ) {
+    return;
+  }
+
+  const url = new URL(request.url);
+
+  // Don't cache API requests.
+  // API requests must always go to Spring Boot/PostgreSQL.
+  if (url.pathname.startsWith("/api/")) {
+    return;
+  }
+
+  event.respondWith(
+    fetch(request)
+      .then(response => {
+
+        if (response && response.ok) {
+
+          const copy = response.clone();
+
+          caches.open(CACHE_NAME)
+            .then(cache => {
+              cache.put(request, copy).catch(() => {});
+            });
+
+        }
+
+        return response;
+
+      })
+      .catch(() =>
+        caches.match(request)
+      )
+  );
+
 });
