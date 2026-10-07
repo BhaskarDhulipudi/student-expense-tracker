@@ -6,14 +6,31 @@
   <link rel="manifest" href="/manifest.webmanifest"><link rel="stylesheet" href="/app.css"><title>Student Expense Tracker</title>
 </head>
 <body>
-<main class="shell">
+<div id="authGate" class="auth-shell">
+  <div class="auth-card card">
+    <div class="eyebrow">PRIVATE MODE</div>
+    <h2>Enter your private password</h2>
+    <p>Access your personal expense tracker.</p>
+    <form id="authForm" class="auth-form">
+      <input id="passwordInput" type="password" placeholder="Password" autocomplete="current-password" required>
+      <button type="submit" class="primary">Unlock</button>
+      <div id="authError" class="auth-error" aria-live="polite"></div>
+    </form>
+  </div>
+</div>
+
+<main id="appShell" class="shell hidden">
   <header class="header">
     <div><div class="eyebrow">PERSONAL FINANCE</div><h1>Student Expense Tracker</h1><p>Know where your money goes — even when you're offline.</p></div>
-    <div id="network" class="status"><span class="dot"></span><span>Checking…</span></div>
+    <div class="header-actions">
+      <button id="logoutBtn" class="ghost small">Lock</button>
+      <div id="network" class="status"><span class="dot"></span><span>Checking…</span></div>
+    </div>
   </header>
 
   <section class="monthbar card">
-    <div><label for="month">Tracking month</label><input id="month" type="month"></div>
+    <div class="month-field"><label for="month">Tracking month</label><input id="month" type="month"></div>
+    <div class="budget-field"><label for="budget">Monthly budget</label><input id="budget" type="number" min="0" step="50" placeholder="6000"></div>
     <div class="monthhint"><span id="syncText">Ready</span><button id="syncBtn" class="ghost">Sync now</button></div>
   </section>
 
@@ -21,6 +38,7 @@
     <article class="stat card"><span>Total spent</span><strong id="total">₹0</strong><small>This month</small></article>
     <article class="stat card"><span>Daily average</span><strong id="average">₹0</strong><small id="averageHint">0 days tracked</small></article>
     <article class="stat card"><span>Top category</span><strong id="topCategory">—</strong><small id="topAmount">No spending yet</small></article>
+    <article class="stat card"><span>Budget left</span><strong id="remaining">₹0</strong><small id="remainingHint">Set a budget</small></article>
     <article class="stat card"><span>Transactions</span><strong id="count">0</strong><small>Recorded expenses</small></article>
   </section>
 

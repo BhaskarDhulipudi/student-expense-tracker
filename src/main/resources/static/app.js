@@ -14,9 +14,73 @@ const monthNow =
 const today =
   `${monthNow}-${pad(now.getDate())}`;
 
+const AUTH_COOKIE = "expense_tracker_auth";
+const BUDGET_KEY = "studentExpenseTrackerBudget";
+
 $("month").value = monthNow;
 $("date").value = today;
 
+function getCookie(name) {
+    const cookie = document.cookie
+        .split(";")
+        .find(item => item.trim().startsWith(`${name}=`));
+
+    return cookie ? cookie.split("=")[1] : null;
+}
+
+function setCookie(name, value, days = 7) {
+    const expires = new Date();
+    expires.setTime(expires.getTime() + days * 24 * 60 * 60 * 1000);
+    const securePart = location.protocol === "https:" ? "; Secure" : "";
+    document.cookie = `${name}=${value}; expires=${expires.toUTCString()}; path=/; SameSite=Lax${securePart}`;
+}
+
+function removeCookie(name) {
+    const securePart = location.protocol === "https:" ? "; Secure" : "";
+    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax${securePart}`;
+}
+
+async function getAppConfig() {
+    const response = await fetch("/api/app/config", { cache: "no-store" });
+
+    if (!response.ok) {
+        return { passwordRequired: false };
+    }
+
+    return response.json();
+}
+
+function showApp() {
+    $("authGate")?.classList.add("hidden");
+    $("appShell")?.classList.remove("hidden");
+}
+
+function showAuth() {
+    $("authGate")?.classList.remove("hidden");
+    $("appShell")?.classList.add("hidden");
+}
+
+async function ensureUnlocked() {
+    const config = await getAppConfig();
+
+    if (!config.passwordRequired || getCookie(AUTH_COOKIE) === "1") {
+        showApp();
+        return true;
+    }
+
+    showAuth();
+    return false;
+}
+
+function readBudget() {
+    const raw = localStorage.getItem(BUDGET_KEY);
+    const value = Number(raw || 0);
+    return Number.isFinite(value) ? value : 0;
+}
+
+function writeBudget(value) {
+    localStorage.setItem(BUDGET_KEY, String(value));
+}
 
 /* =========================================================
    HELPERS
@@ -222,6 +286,13 @@ async function render() {
     const selectedMonth =
         $("month").value || monthNow;
 
+    const budget = readBudget();
+
+    const budgetInput = $("budget");
+    if (budgetInput && budgetInput.value !== String(budget)) {
+        budgetInput.value = budget > 0 ? String(budget) : "";
+    }
+
     /*
      * IMPORTANT:
      *
@@ -255,6 +326,22 @@ async function render() {
             0
         );
 
+    const remaining = budget - total;
+    const remainingEl = $("remaining");
+    const remainingHint = $("remainingHint");
+
+    if (remainingEl) {
+        remainingEl.textContent = money(remaining);
+        remainingEl.classList.toggle("remaining-positive", remaining >= 0);
+        remainingEl.classList.toggle("remaining-negative", remaining < 0);
+    }
+
+    if (remainingHint) {
+        remainingHint.textContent =
+            budget > 0
+                ? (remaining >= 0 ? `₹${money(remaining).replace('₹','')} left` : `₹${money(Math.abs(remaining)).replace('₹','')} over budget`)
+                : "Set a budget";
+    }
 
     /* -----------------------------------------
        DAILY AVERAGE
@@ -722,6 +809,59 @@ async function syncWithCloud() {
 
 
 /* =========================================================
+   PASSWORD GATE
+========================================================= */
+
+$("authForm")?.addEventListener(
+    "submit",
+    async event => {
+
+        event.preventDefault();
+
+        const password = $("passwordInput")?.value || "";
+        const authError = $("authError");
+
+        try {
+            const response = await fetch("/api/app/auth", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ password })
+            });
+
+            if (!response.ok) {
+                throw new Error("Invalid password.");
+            }
+
+            setCookie(AUTH_COOKIE, "1", 7);
+            showApp();
+            $("passwordInput").value = "";
+            if (authError) {
+                authError.textContent = "";
+            }
+
+            await render();
+
+            if (navigator.onLine) {
+                await syncWithCloud();
+            }
+
+        } catch (error) {
+            if (authError) {
+                authError.textContent = error.message || "Password failed.";
+            }
+        }
+    }
+);
+
+$("logoutBtn")?.addEventListener("click", () => {
+    removeCookie(AUTH_COOKIE);
+    showAuth();
+    $("passwordInput")?.focus();
+});
+
+/* =========================================================
    ADD EXPENSE
 ========================================================= */
 
@@ -852,6 +992,15 @@ $("syncBtn").addEventListener(
     async () => {
 
         await syncWithCloud();
+    }
+);
+
+$("budget").addEventListener(
+    "input",
+    () => {
+        const value = Number($("budget").value || 0);
+        writeBudget(Number.isFinite(value) ? value : 0);
+        render();
     }
 );
 
@@ -1012,22 +1161,25 @@ document.addEventListener(
 
 updateNetworkStatus();
 
+ensureUnlocked().then(unlocked => {
+    if (!unlocked) {
+        return;
+    }
 
-/*
- * Render local data immediately.
- */
+    /*
+     * Render local data immediately.
+     */
 
-render();
+    render();
 
+    /*
+     * Then synchronize with cloud.
+     */
 
-/*
- * Then synchronize with cloud.
- */
-
-if (navigator.onLine) {
-
-    syncWithCloud();
-}
+    if (navigator.onLine) {
+        syncWithCloud();
+    }
+});
 
 
 /* =========================================================
