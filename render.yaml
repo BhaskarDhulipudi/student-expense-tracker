@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: student-expense-tracker
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: student-expenses-db
+          property: connectionString
+      - key: DB_USERNAME
+        fromDatabase:
+          name: student-expenses-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: student-expenses-db
+          property: password
+
+databases:
+  - name: student-expenses-db
+    plan: free
+    region: singapore
+    databaseName: student_expenses
+    user: student_expenses_user
